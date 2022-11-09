@@ -6,6 +6,7 @@
 ; Initializes serial. If this isn't done, first byte sent to
 ; PC might be corrupt.
 ; Preserved: X, Y
+; 0xe412
 serial_init:
 	sec
 	lda #$FF

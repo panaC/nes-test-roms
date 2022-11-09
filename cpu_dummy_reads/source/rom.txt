@@ -1,0 +1,1683 @@
+ca65 V2.19 - Git 79fd078ae
+Main file   : cpu_dummy_reads.s
+Current file: cpu_dummy_reads.s
+
+000000r 1               ; Tests instructions that do dummy reads before the real read/write
+000000r 1               ; Tests LDA and STA with modes (ZP,X), (ZP),Y and ABS,X
+000000r 1               ; Dummy reads are made for the following cases:
+000000r 1               ; LDA ABS,X or (ZP),Y when carry is generated from low byte
+000000r 1               ; STA ABS,X or (ZP),Y
+000000r 1               
+000000r 1               .include "shell.inc"
+000000r 2               ; Program shell with text console. Included before user code.
+000000r 2               
+000000r 2               ; Detect inclusion loops (otherwise ca65 goes crazy)
+000000r 2               .ifdef SHELL_INC
+000000r 2               	.error "File included twice"
+000000r 2               	.end
+000000r 2               .endif
+000000r 2               SHELL_INC = 1
+000000r 2               
+000000r 2               
+000000r 2               ; ******************************************* Prefix
+000000r 2               
+000000r 2               .segment "CODE2"
+000000r 2               
+000000r 2               ; Temporary variables that ANY routine might modify, so
+000000r 2               ; only use them between routine calls.
+000000r 2               temp   = <$A
+000000r 2               temp2  = <$B
+000000r 2               temp3  = <$C
+000000r 2               addr   = <$E
+000000r 2               
+000000r 2               ; RAM that isn't cleared by init routine
+000000r 2               nv_ram = $7F0
+000000r 2               
+000000r 2               ; Macros and constants
+000000r 2               .include "macros.inc"
+000000r 3               ; jxx equivalents to bxx
+000000r 3               .macpack longbranch
+000000r 4               .macro  jeq     Target
+000000r 4                       .if     .match(Target, 0)
+000000r 4                       bne     *+5
+000000r 4                       jmp     Target
+000000r 4                       .elseif .def(Target) .and .const((*-2)-(Target)) .and ((*+2)-(Target) <= 127)
+000000r 4                               beq     Target
+000000r 4                       .else
+000000r 4                               bne     *+5
+000000r 4                               jmp     Target
+000000r 4                       .endif
+000000r 4               .endmacro
+000000r 4               .macro  jne     Target
+000000r 4                       .if     .match(Target, 0)
+000000r 4                               beq     *+5
+000000r 4                               jmp     Target
+000000r 4                       .elseif .def(Target) .and .const((*-2)-(Target)) .and ((*+2)-(Target) <= 127)
+000000r 4                               bne     Target
+000000r 4                       .else
+000000r 4                               beq     *+5
+000000r 4                               jmp     Target
+000000r 4                       .endif
+000000r 4               .endmacro
+000000r 4               .macro  jmi     Target
+000000r 4                       .if     .match(Target, 0)
+000000r 4                               bpl     *+5
+000000r 4                               jmp     Target
+000000r 4                       .elseif .def(Target) .and .const((*-2)-(Target)) .and ((*+2)-(Target) <= 127)
+000000r 4                               bmi     Target
+000000r 4                       .else
+000000r 4                               bpl     *+5
+000000r 4                               jmp     Target
+000000r 4                       .endif
+000000r 4               .endmacro
+000000r 4               .macro  jpl     Target
+000000r 4                       .if     .match(Target, 0)
+000000r 4                               bmi     *+5
+000000r 4                               jmp     Target
+000000r 4                       .elseif .def(Target) .and .const((*-2)-(Target)) .and ((*+2)-(Target) <= 127)
+000000r 4                               bpl     Target
+000000r 4                       .else
+000000r 4                               bmi     *+5
+000000r 4                               jmp     Target
+000000r 4                       .endif
+000000r 4               .endmacro
+000000r 4               .macro  jcs     Target
+000000r 4                       .if     .match(Target, 0)
+000000r 4                               bcc     *+5
+000000r 4                               jmp     Target
+000000r 4                       .elseif .def(Target) .and .const((*-2)-(Target)) .and ((*+2)-(Target) <= 127)
+000000r 4                               bcs     Target
+000000r 4                       .else
+000000r 4                               bcc     *+5
+000000r 4                               jmp     Target
+000000r 4                       .endif
+000000r 4               .endmacro
+000000r 4               .macro  jcc     Target
+000000r 4                       .if     .match(Target, 0)
+000000r 4                               bcs     *+5
+000000r 4                               jmp     Target
+000000r 4                       .elseif .def(Target) .and .const((*-2)-(Target)) .and ((*+2)-(Target) <= 127)
+000000r 4                               bcc     Target
+000000r 4                       .else
+000000r 4                               bcs     *+5
+000000r 4                               jmp     Target
+000000r 4                       .endif
+000000r 4               .endmacro
+000000r 4               .macro  jvs     Target
+000000r 4                       .if     .match(Target, 0)
+000000r 4                               bvc     *+5
+000000r 4                               jmp     Target
+000000r 4                       .elseif .def(Target) .and .const((*-2)-(Target)) .and ((*+2)-(Target) <= 127)
+000000r 4                               bvs     Target
+000000r 4                       .else
+000000r 4                               bvc     *+5
+000000r 4                               jmp     Target
+000000r 4                       .endif
+000000r 4               .endmacro
+000000r 4               .macro  jvc     Target
+000000r 4                       .if     .match(Target, 0)
+000000r 4                               bvs     *+5
+000000r 4                               jmp     Target
+000000r 4                       .elseif .def(Target) .and .const((*-2)-(Target)) .and ((*+2)-(Target) <= 127)
+000000r 4                               bvc     Target
+000000r 4                       .else
+000000r 4                               bvs     *+5
+000000r 4                               jmp     Target
+000000r 4                       .endif
+000000r 4               .endmacro
+000000r 4               
+000000r 3               
+000000r 3               ; blt, bge equivalents to bcc, bcs
+000000r 3               .define blt bcc
+000000r 3               .define bge bcs
+000000r 3               .define jge jcs
+000000r 3               .define jlt jcc
+000000r 3               
+000000r 3               ; Puts data in another segment
+000000r 3               .macro seg_data seg,data
+000000r 3               	.pushseg
+000000r 3               	.segment seg
+000000r 3               	data
+000000r 3               	.popseg
+000000r 3               .endmacro
+000000r 3               
+000000r 3               ; Reserves size bytes in zeropage/bss for name
+000000r 3               .macro zp_res name,size
+000000r 3               	seg_data "ZEROPAGE",{name: .res size}
+000000r 3               .endmacro
+000000r 3               
+000000r 3               .macro bss_res name,size
+000000r 3               	seg_data "BSS",{name: .res size}
+000000r 3               .endmacro
+000000r 3               
+000000r 3               ; Reserves one byte in zeropage for name (very common)
+000000r 3               .macro zp_byte name
+000000r 3               	seg_data "ZEROPAGE",{name: .res 1}
+000000r 3               .endmacro
+000000r 3               
+000000r 3               ; Passes constant data to routine in addr
+000000r 3               ; Preserved: A, X, Y
+000000r 3               .macro jsr_with_addr routine,data
+000000r 3               	.local Addr
+000000r 3               	pha
+000000r 3               	lda #<Addr
+000000r 3               	sta addr
+000000r 3               	lda #>Addr
+000000r 3               	sta addr+1
+000000r 3               	pla
+000000r 3               	jsr routine
+000000r 3               	seg_data "STRINGS",{Addr: data}
+000000r 3               .endmacro
+000000r 3               
+000000r 3               ; If name isn't yet defined, defines it with value
+000000r 3               .macro SET_DEFAULT name,value
+000000r 3                   .ifndef name
+000000r 3               	name=value
+000000r 3                   .endif
+000000r 3               .endmacro
+000000r 3               
+000000r 3               ; Calls routine multiple times, with A having the
+000000r 3               ; value 'start' the first time, 'start+step' the
+000000r 3               ; second time, up to 'end' for the last time.
+000000r 3               .macro for_loop routine,start,end,step
+000000r 3               	lda #start
+000000r 3               :   pha
+000000r 3               	jsr routine
+000000r 3               	pla
+000000r 3               	clc
+000000r 3               	adc #step
+000000r 3               	cmp #<((end)+(step))
+000000r 3               	bne :-
+000000r 3               .endmacro
+000000r 3               
+000000r 2               .include "nes.inc"
+000000r 3               ; NES I/O locations and masks
+000000r 3               
+000000r 3               ; Clocks per second (NTSC)
+000000r 3               CLOCK_RATE = 1789773
+000000r 3               
+000000r 3               .ifndef BUILD_NSF
+000000r 3               
+000000r 3               ; PPU
+000000r 3               PPUCTRL   = $2000
+000000r 3               PPUMASK   = $2001
+000000r 3               PPUSTATUS = $2002
+000000r 3               SPRADDR   = $2003
+000000r 3               SPRDATA   = $2004
+000000r 3               PPUSCROLL = $2005
+000000r 3               PPUADDR   = $2006
+000000r 3               PPUDATA   = $2007
+000000r 3               SPRDMA    = $4014
+000000r 3               
+000000r 3               PPUCTRL_NMI     = $80
+000000r 3               PPUMASK_BG0     = $0A
+000000r 3               PPUCTRL_8X8     = $00
+000000r 3               PPUCTRL_8X16    = $20
+000000r 3               PPUMASK_SPR     = $14
+000000r 3               PPUMASK_BG0CLIP = $08
+000000r 3               
+000000r 3               .endif
+000000r 3               
+000000r 3               ; APU
+000000r 3               SNDCHN  = $4015
+000000r 3               JOY1    = $4016
+000000r 3               JOY2    = $4017
+000000r 3               SNDMODE = $4017
+000000r 3               
+000000r 3               SNDMODE_NOIRQ   = $40
+000000r 3               
+000000r 2               
+000000r 2               ; Interrupt handlers are wrapped with these
+000000r 2               .define BEGIN_NMI nmi:
+000000r 2               .define END_NMI
+000000r 2               
+000000r 2               .define BEGIN_IRQ irq:
+000000r 2               .define END_IRQ
+000000r 2               
+000000r 2               ; Set undefined flags to 0, allowing simpler .if statements
+000000r 2               SET_DEFAULT BUILD_NSF,0
+000000r 2               SET_DEFAULT BUILD_MULTI,0
+000000r 2               SET_DEFAULT BUILD_DEVCART,0
+000000r 2               
+000000r 2               ; Number of clocks devcart takes to jump to user reset
+000000r 2               SET_DEFAULT DEVCART_DELAY,0
+000000r 2               
+000000r 2               
+000000r 2               ; ******************************************* Libraries
+000000r 2               
+000000r 2               .include "delay.s"
+000000r 3               ; Delays in clocks and milliseconds. All routines re-entrant
+000000r 3               ; (no global data).
+000000r 3               
+000000r 3               ; Delays n milliseconds (1/1000 second)
+000000r 3               ; n can range from 0 to 1100.
+000000r 3               ; Preserved: X, Y
+000000r 3               .macro delay_msec n
+000000r 3                   .if (n) < 0 .or (n) > 1100
+000000r 3               	.error "time out of range"
+000000r 3                   .endif
+000000r 3                   delay ((n)*CLOCK_RATE+500)/1000
+000000r 3               .endmacro
+000000r 3               
+000000r 3               
+000000r 3               ; Delays n microseconds (1/1000000 second).
+000000r 3               ; n can range from 0 to 100000.
+000000r 3               ; Preserved: X, Y
+000000r 3               .macro delay_usec n
+000000r 3                   .if (n) < 0 .or (n) > 100000
+000000r 3               	.error "time out of range"
+000000r 3                   .endif
+000000r 3                   delay ((n)*((CLOCK_RATE+50)/100)+5000)/10000
+000000r 3               .endmacro
+000000r 3               
+000000r 3               
+000000r 3               ; Delays n clocks, from 2 to 16777215
+000000r 3               ; Preserved: X, Y
+000000r 3               .macro delay n
+000000r 3                   .if (n) < 0 .or (n) = 1 .or (n) > 16777215
+000000r 3               	.error "Delay out of range"
+000000r 3                   .endif
+000000r 3                   .if (n) < 14 .and (n) <> 12
+000000r 3               	delay_inline (n)
+000000r 3                   .elseif (n) < 27
+000000r 3               	delay_unrolled (n)
+000000r 3                   .elseif <(n) = 0
+000000r 3               	delay_256 (n)
+000000r 3                   .else
+000000r 3               	lda #<((n)-27)
+000000r 3               	jsr delay_a_25_clocks
+000000r 3               	delay_256 ((n)-27)
+000000r 3                   .endif
+000000r 3               .endmacro
+000000r 3               
+000000r 3               
+000000r 3               ; Delays A+25 clocks (including JSR)
+000000r 3               ; Preserved: X, Y
+000000r 3               .align 64
+000000r 3  E9 07        :       sbc #7          ; carry set by CMP
+000002r 3               delay_a_25_clocks:
+000002r 3  C9 07        	cmp #7
+000004r 3  B0 FA        	bcs :-          ; do multiples of 7
+000006r 3  4A           	lsr a           ; bit 0
+000007r 3  B0 00        	bcs :+
+000009r 3               :                       ; A=clocks/2, either 0,1,2,3
+000009r 3  F0 05        	beq @zero       ; 0: 5
+00000Br 3  4A           	lsr a
+00000Cr 3  F0 04        	beq :+          ; 1: 7
+00000Er 3  90 02        	bcc :+          ; 2: 9
+000010r 3  D0 00        @zero:  bne :+          ; 3: 11
+000012r 3  60           :       rts             ; (thanks to dclxvi for the algorithm)
+000013r 3               
+000013r 3               
+000013r 3               ; Delays A*256+16 clocks (including JSR)
+000013r 3               ; Preserved: X, Y
+000013r 3               delay_256a_16_clocks:
+000013r 3  C9 00        	cmp #0
+000015r 3  D0 06        	bne :+
+000017r 3  60           	rts
+000018r 3               delay_256a_clocks_:
+000018r 3  48           	pha
+000019r 3  A9 C7        	lda #256-19-22-16
+00001Br 3  D0 03        	bne @first ; always branches
+00001Dr 3  48           :       pha
+00001Er 3  A9 D7        	lda #256-19-22
+000020r 3  20 rr rr     @first: jsr delay_a_25_clocks
+000023r 3  68           	pla
+000024r 3  18           	clc
+000025r 3  69 FF        	adc #255
+000027r 3  D0 F4        	bne :-
+000029r 3  60           	rts
+00002Ar 3               
+00002Ar 3               
+00002Ar 3               ; Delays A*65536+16 clocks (including JSR)
+00002Ar 3               ; Preserved: X, Y
+00002Ar 3               delay_65536a_16_clocks:
+00002Ar 3  C9 00        	cmp #0
+00002Cr 3  D0 06        	bne :+
+00002Er 3  60           	rts
+00002Fr 3               delay_65536a_clocks_:
+00002Fr 3  48           	pha
+000030r 3  A9 C7        	lda #256-19-22-16
+000032r 3  D0 03        	bne @first
+000034r 3  48           :       pha
+000035r 3  A9 D7        	lda #256-19-22
+000037r 3  20 rr rr     @first: jsr delay_a_25_clocks
+00003Ar 3  A9 FF        	lda #255
+00003Cr 3  20 rr rr     	jsr delay_256a_clocks_
+00003Fr 3  68           	pla
+000040r 3  18           	clc
+000041r 3  69 FF        	adc #255
+000043r 3  D0 EF        	bne :-
+000045r 3  60           	rts
+000046r 3               
+000046r 3               .macro delay_inline n
+000046r 3                   .if n = 7 .or n >= 9
+000046r 3               	pha
+000046r 3               	pla
+000046r 3               	delay_inline (n-7)
+000046r 3                   .elseif n >= 3 .and n & 1
+000046r 3               	lda <0
+000046r 3               	delay_inline (n-3)
+000046r 3                   .elseif n >= 2
+000046r 3               	nop
+000046r 3               	delay_inline (n-2)
+000046r 3                   .elseif n > 0
+000046r 3               	.error "delay_short internal error"
+000046r 3                   .endif
+000046r 3               .endmacro
+000046r 3               
+000046r 3               .macro delay_unrolled n
+000046r 3                   .if n & 1
+000046r 3               	lda <0
+000046r 3               	jsr delay_unrolled_-((n-15)/2)
+000046r 3                   .else
+000046r 3               	jsr delay_unrolled_-((n-12)/2)
+000046r 3                   .endif
+000046r 3               .endmacro
+000046r 3               
+000046r 3  EA EA EA EA  	.res 7,$EA ; NOP
+00004Ar 3  EA EA EA     
+00004Dr 3               delay_unrolled_:
+00004Dr 3  60           	rts
+00004Er 3               
+00004Er 3               .macro delay_256 n
+00004Er 3                   .if >n
+00004Er 3               	lda #>n
+00004Er 3               	jsr delay_256a_clocks_
+00004Er 3                   .endif
+00004Er 3                   .if ^n
+00004Er 3               	lda #^n
+00004Er 3               	jsr delay_65536a_clocks_
+00004Er 3                   .endif
+00004Er 3               .endmacro
+00004Er 3               
+00004Er 3               
+00004Er 2               .include "print.s"
+00004Er 3               ; Prints values in various ways to output, including numbers and strings.
+00004Er 3               
+00004Er 3               newline = 10
+00004Er 3               
+00004Er 3               ; Prints indicated register to console as two hex chars and space
+00004Er 3               ; Preserved: A, X, Y, P
+00004Er 3               print_a:
+00004Er 3  08           	php
+00004Fr 3  48           	pha
+000050r 3               print_reg_:
+000050r 3  20 rr rr     	jsr print_hex
+000053r 3  A9 20        	lda #' '
+000055r 3  20 rr rr     	jsr print_char_
+000058r 3  68           	pla
+000059r 3  28           	plp
+00005Ar 3  60           	rts
+00005Br 3               
+00005Br 3               print_x:
+00005Br 3  08           	php
+00005Cr 3  48           	pha
+00005Dr 3  8A           	txa
+00005Er 3  4C rr rr     	jmp print_reg_
+000061r 3               
+000061r 3               print_y:
+000061r 3  08           	php
+000062r 3  48           	pha
+000063r 3  98           	tya
+000064r 3  4C rr rr     	jmp print_reg_
+000067r 3               
+000067r 3               print_p:
+000067r 3  08           	php
+000068r 3  48           	pha
+000069r 3  08           	php
+00006Ar 3  68           	pla
+00006Br 3  4C rr rr     	jmp print_reg_
+00006Er 3               
+00006Er 3               print_s:
+00006Er 3  08           	php
+00006Fr 3  48           	pha
+000070r 3  8A           	txa
+000071r 3  BA           	tsx
+000072r 3  E8           	inx
+000073r 3  E8           	inx
+000074r 3  E8           	inx
+000075r 3  E8           	inx
+000076r 3  20 rr rr     	jsr print_x
+000079r 3  AA           	tax
+00007Ar 3  68           	pla
+00007Br 3  28           	plp
+00007Cr 3  60           	rts
+00007Dr 3               
+00007Dr 3               
+00007Dr 3               ; Prints A as two hex characters, NO space after
+00007Dr 3               ; Preserved: X, Y
+00007Dr 3               print_hex:
+00007Dr 3               	; Update checksum
+00007Dr 3  48           	pha
+00007Er 3  20 rr rr     	jsr update_crc
+000081r 3  68           	pla
+000082r 3               
+000082r 3               	; Print high nibble
+000082r 3  48           	pha
+000083r 3  4A           	lsr a
+000084r 3  4A           	lsr a
+000085r 3  4A           	lsr a
+000086r 3  4A           	lsr a
+000087r 3  20 rr rr     	jsr @nibble
+00008Ar 3  68           	pla
+00008Br 3               
+00008Br 3               	; Print low nibble
+00008Br 3  29 0F        	and #$0F
+00008Dr 3               @nibble:
+00008Dr 3  C9 0A 90 02  	cmp #10
+000091r 3               	blt @digit
+000091r 3  69 06        	adc #6;+1 since carry is set
+000093r 3  69 30        @digit: adc #'0'
+000095r 3  4C rr rr     	jmp print_char_
+000098r 3               
+000098r 3               
+000098r 3               ; Prints character and updates checksum UNLESS it's a newline.
+000098r 3               ; Preserved: X, Y
+000098r 3               print_char:
+000098r 3  C9 0A        	cmp #newline
+00009Ar 3  F0 05        	beq :+
+00009Cr 3  48           	pha
+00009Dr 3  20 rr rr     	jsr update_crc
+0000A0r 3  68           	pla
+0000A1r 3  4C rr rr     :       jmp print_char_
+0000A4r 3               
+0000A4r 3               
+0000A4r 3               ; Prints space. Does NOT update checksum.
+0000A4r 3               ; Preserved: A, X, Y
+0000A4r 3               print_space:
+0000A4r 3  48           	pha
+0000A5r 3  A9 20        	lda #' '
+0000A7r 3  20 rr rr     	jsr print_char_
+0000AAr 3  68           	pla
+0000ABr 3  60           	rts
+0000ACr 3               
+0000ACr 3               
+0000ACr 3               ; Advances to next line. Does NOT update checksum.
+0000ACr 3               ; Preserved: A, X, Y
+0000ACr 3               print_newline:
+0000ACr 3  48           	pha
+0000ADr 3  A9 0A        	lda #newline
+0000AFr 3  20 rr rr     	jsr print_char_
+0000B2r 3  68           	pla
+0000B3r 3  60           	rts
+0000B4r 3               
+0000B4r 3               
+0000B4r 3               ; Prints string
+0000B4r 3               ; Preserved: A, X, Y
+0000B4r 3               .macro print_str str
+0000B4r 3               	jsr_with_addr print_str_addr,{.byte str,0}
+0000B4r 3               .endmacro
+0000B4r 3               
+0000B4r 3               
+0000B4r 3               ; Prints string at addr and leaves addr pointing to
+0000B4r 3               ; byte AFTER zero terminator.
+0000B4r 3               ; Preserved: A, X, Y
+0000B4r 3               print_str_addr:
+0000B4r 3  48           	pha
+0000B5r 3  98           	tya
+0000B6r 3  48           	pha
+0000B7r 3               
+0000B7r 3  A0 00        	ldy #0
+0000B9r 3  F0 06        	beq :+ ; always taken
+0000BBr 3  20 rr rr     @loop:  jsr print_char
+0000BEr 3  20 rr rr     	jsr inc_addr
+0000C1r 3  B1 0E        :       lda (addr),y
+0000C3r 3  D0 F6        	bne @loop
+0000C5r 3               
+0000C5r 3  68           	pla
+0000C6r 3  A8           	tay
+0000C7r 3  68           	pla
+0000C8r 3               	; FALL THROUGH
+0000C8r 3               
+0000C8r 3               ; Increments 16-bit value in addr.
+0000C8r 3               ; Preserved: A, X, Y
+0000C8r 3               inc_addr:
+0000C8r 3  E6 0E        	inc addr
+0000CAr 3  F0 01        	beq :+
+0000CCr 3  60           	rts
+0000CDr 3  E6 0F        :       inc addr+1
+0000CFr 3  60           	rts
+0000D0r 3               
+0000D0r 3               
+0000D0r 3               ; Prints A as 1-3 digit decimal value, NO space after.
+0000D0r 3               ; Preserved: Y
+0000D0r 3               print_dec:
+0000D0r 3               	; Hundreds
+0000D0r 3  C9 64 90 0C  	cmp #100
+0000D4r 3               	blt @tens
+0000D4r 3  A2 30        	ldx #'0'
+0000D6r 3  E9 64        :       sbc #100
+0000D8r 3  E8           	inx
+0000D9r 3  C9 64 B0 F9  	cmp #100
+0000DDr 3               	bge :-
+0000DDr 3  20 rr rr     	jsr @digit
+0000E0r 3               
+0000E0r 3               	; Tens
+0000E0r 3  C9 0A 90 0C  @tens:  cmp #10
+0000E4r 3               	blt @ones
+0000E4r 3  A2 30        	ldx #'0'
+0000E6r 3  E9 0A        :       sbc #10
+0000E8r 3  E8           	inx
+0000E9r 3  C9 0A B0 F9  	cmp #10
+0000EDr 3               	bge :-
+0000EDr 3  20 rr rr     	jsr @digit
+0000F0r 3               
+0000F0r 3               	; Ones
+0000F0r 3  09 30        @ones:  ora #'0'
+0000F2r 3  4C rr rr     	jmp print_char
+0000F5r 3               
+0000F5r 3               	; Print a single digit
+0000F5r 3  48           @digit: pha
+0000F6r 3  8A           	txa
+0000F7r 3  20 rr rr     	jsr print_char
+0000FAr 3  68           	pla
+0000FBr 3  60           	rts
+0000FCr 3               
+0000FCr 3               
+0000FCr 3               ; Prints one of two characters based on condition.
+0000FCr 3               ; SEC; print_cc bcs,'C','-' prints 'C'.
+0000FCr 3               ; Preserved: A, X, Y
+0000FCr 3               .macro print_cc cond,yes,no
+0000FCr 3               	pha
+0000FCr 3               	cond *+6
+0000FCr 3               	lda #no
+0000FCr 3               	bne *+4
+0000FCr 3               	lda #yes
+0000FCr 3               	jsr print_char
+0000FCr 3               	pla
+0000FCr 3               .endmacro
+0000FCr 3               
+0000FCr 2               .include "crc.s"
+0000FCr 3               ; CRC-32 checksum calculation
+0000FCr 3               
+0000FCr 3  xx xx xx xx  zp_res  checksum,4
+0000FCr 3  xx           zp_byte checksum_temp
+0000FCr 3  xx           zp_byte checksum_off_
+0000FCr 3               
+0000FCr 3               ; Turns CRC updating on/off. Allows nesting.
+0000FCr 3               ; Preserved: X, Y
+0000FCr 3               crc_off:
+0000FCr 3  C6 rr        	dec checksum_off_
+0000FEr 3  60           	rts
+0000FFr 3               
+0000FFr 3  E6 rr        crc_on: inc checksum_off_
+000101r 3  F0 05        	beq :+
+000103r 3  30 03 4C rr  	jpl internal_error ; catch unbalanced crc calls
+000107r 3  rr           
+000108r 3  60           :       rts
+000109r 3               
+000109r 3               
+000109r 3               ; Initializes checksum module. Might initialize tables
+000109r 3               ; in the future.
+000109r 3               init_crc:
+000109r 3               	; FALL THROUGH
+000109r 3               ; Clears checksum and turns it on
+000109r 3               ; Preserved: X, Y
+000109r 3               reset_crc:
+000109r 3  A9 00        	lda #0
+00010Br 3  85 rr        	sta checksum_off_
+00010Dr 3  A9 FF        	lda #$FF
+00010Fr 3  85 rr        	sta checksum
+000111r 3  85 rr        	sta checksum + 1
+000113r 3  85 rr        	sta checksum + 2
+000115r 3  85 rr        	sta checksum + 3
+000117r 3  60           	rts
+000118r 3               
+000118r 3               
+000118r 3               ; Updates checksum with byte in A (unless disabled via crc_off)
+000118r 3               ; Preserved: X, Y
+000118r 3               ; Time: 350 clocks average
+000118r 3               update_crc:
+000118r 3  24 rr        	bit checksum_off_
+00011Ar 3  30 2E        	bmi update_crc_off
+00011Cr 3               update_crc_:
+00011Cr 3  86 rr        	stx checksum_temp
+00011Er 3  45 rr        	eor checksum
+000120r 3  A2 08        	ldx #8
+000122r 3  46 rr        @bit:   lsr checksum+3
+000124r 3  66 rr        	ror checksum+2
+000126r 3  66 rr        	ror checksum+1
+000128r 3  6A           	ror a
+000129r 3  90 18        	bcc :+
+00012Br 3  85 rr        	sta checksum
+00012Dr 3  A5 rr        	lda checksum+3
+00012Fr 3  49 ED        	eor #$ED
+000131r 3  85 rr        	sta checksum+3
+000133r 3  A5 rr        	lda checksum+2
+000135r 3  49 B8        	eor #$B8
+000137r 3  85 rr        	sta checksum+2
+000139r 3  A5 rr        	lda checksum+1
+00013Br 3  49 83        	eor #$83
+00013Dr 3  85 rr        	sta checksum+1
+00013Fr 3  A5 rr        	lda checksum
+000141r 3  49 20        	eor #$20
+000143r 3  CA           :       dex
+000144r 3  D0 DC        	bne @bit
+000146r 3  85 rr        	sta checksum
+000148r 3  A6 rr        	ldx checksum_temp
+00014Ar 3               update_crc_off:
+00014Ar 3  60           	rts
+00014Br 3               
+00014Br 3               
+00014Br 3               ; Prints checksum as 8-character hex value
+00014Br 3               print_crc:
+00014Br 3  20 rr rr     	jsr crc_off
+00014Er 3               
+00014Er 3               	; Print complement
+00014Er 3  A2 03        	ldx #3
+000150r 3  B5 rr        :       lda checksum,x
+000152r 3  49 FF        	eor #$FF
+000154r 3  20 rr rr     	jsr print_hex
+000157r 3  CA           	dex
+000158r 3  10 F6        	bpl :-
+00015Ar 3               
+00015Ar 3  4C rr rr     	jmp crc_on
+00015Dr 3               
+00015Dr 2               .include "testing.s"
+00015Dr 3               ; Utilities for writing test ROMs
+00015Dr 3               
+00015Dr 3  xx           zp_res  test_code,1 ; code of current test
+00015Dr 3  xx xx        zp_res  test_name,2 ; address of name of current test, or 0 of none
+00015Dr 3               
+00015Dr 3               
+00015Dr 3               ; Reports that all tests passed
+00015Dr 3               tests_passed:
+00015Dr 3               .if !BUILD_MULTI
+00015Dr 3  20 rr rr     	jsr print_filename
+000160r 3  48 A9 rr 85  	print_str "Passed"
+000164r 3  0E A9 rr 85  
+000168r 3  0F 68 20 rr  
+00016Dr 3               .endif
+00016Dr 3  A9 00        	lda #0
+00016Fr 3  4C rr rr     	jmp exit
+000172r 3               
+000172r 3               
+000172r 3               ; Reports that the current test failed. Prints code and
+000172r 3               ; name last set with set_test, or just "Failed" if none
+000172r 3               ; have been set yet.
+000172r 3               test_failed:
+000172r 3  A5 rr        	lda test_code
+000174r 3               
+000174r 3               	; Treat 0 as 1, in case it wasn't ever set
+000174r 3  D0 04        	bne :+
+000176r 3  A9 01        	lda #1
+000178r 3  85 rr        	sta test_code
+00017Ar 3               :
+00017Ar 3               	; If code >= 2, print name
+00017Ar 3  C9 02 90 13  	cmp #2
+00017Er 3               	blt :+
+00017Er 3  A5 rr        	lda test_name+1
+000180r 3  F0 0F        	beq :+
+000182r 3  20 rr rr     	jsr print_newline
+000185r 3  85 0F        	sta addr+1
+000187r 3  A5 rr        	lda test_name
+000189r 3  85 0E        	sta addr
+00018Br 3  20 rr rr     	jsr print_str_addr
+00018Er 3  20 rr rr     	jsr print_newline
+000191r 3               :
+000191r 3               .if !BUILD_MULTI
+000191r 3  20 rr rr     	jsr print_filename
+000194r 3               .endif
+000194r 3               	; End program
+000194r 3  A5 rr        	lda test_code
+000196r 3  4C rr rr     	jmp exit
+000199r 3               
+000199r 3               
+000199r 3               ; Sets current test code and optional name. Also resets
+000199r 3               ; checksum.
+000199r 3               .macro set_test code,name
+000199r 3               	pha
+000199r 3               	lda #code
+000199r 3               	jsr set_test_
+000199r 3               	.local Addr
+000199r 3               	lda #<Addr
+000199r 3               	sta <test_name
+000199r 3               	lda #>Addr
+000199r 3               	sta <test_name+1
+000199r 3               	seg_data "STRINGS",{Addr: .byte name,0}
+000199r 3               	pla
+000199r 3               .endmacro
+000199r 3               
+000199r 3               set_test_:
+000199r 3  85 rr        	sta test_code
+00019Br 3  4C rr rr     	jmp reset_crc
+00019Er 3               
+00019Er 3               
+00019Er 3               ; If checksum doesn't match expected, reports failed test.
+00019Er 3               ; Passing 0 just prints checksum.
+00019Er 3               ; Preserved: A, X, Y
+00019Er 3               .macro check_crc expected
+00019Er 3               	.if expected
+00019Er 3               		jsr_with_addr check_crc_,{.dword expected}
+00019Er 3               	.else
+00019Er 3               		; print checksum if 0 is passed
+00019Er 3               		jsr print_newline
+00019Er 3               		jsr print_crc
+00019Er 3               		jsr print_newline
+00019Er 3               	.endif
+00019Er 3               .endmacro
+00019Er 3               
+00019Er 3               check_crc_:
+00019Er 3  48           	pha
+00019Fr 3  98           	tya
+0001A0r 3  48           	pha
+0001A1r 3               
+0001A1r 3               	; Compare with complemented checksum
+0001A1r 3  A0 03        	ldy #3
+0001A3r 3  B1 0E        :       lda (addr),y
+0001A5r 3  38           	sec
+0001A6r 3  79 rr rr     	adc checksum,y
+0001A9r 3  D0 07        	bne @wrong
+0001ABr 3  88           	dey
+0001ACr 3  10 F5        	bpl :-
+0001AEr 3               
+0001AEr 3  68           	pla
+0001AFr 3  A8           	tay
+0001B0r 3  68           	pla
+0001B1r 3  60           	rts
+0001B2r 3               
+0001B2r 3  20 rr rr     @wrong: jsr print_newline
+0001B5r 3  20 rr rr     	jsr print_crc
+0001B8r 3  20 rr rr     	jsr print_newline
+0001BBr 3  4C rr rr     	jmp test_failed
+0001BEr 3               
+0001BEr 3               ; Reports value of A via low/high beeps.
+0001BEr 3               ; Preserved: A, X, Y
+0001BEr 3               beep_bits:
+0001BEr 3  48           	pha
+0001BFr 3               
+0001BFr 3               	; Make reference low beep
+0001BFr 3  18           	clc
+0001C0r 3  20 rr rr     	jsr @beep
+0001C3r 3               
+0001C3r 3               	; End marker
+0001C3r 3  38           	sec
+0001C4r 3               
+0001C4r 3               	; Remove high zero bits
+0001C4r 3  2A           :       rol a
+0001C5r 3  F0 0A        	beq @zero
+0001C7r 3  90 FB        	bcc :-
+0001C9r 3               
+0001C9r 3               	; Play remaining bits
+0001C9r 3  08           :       php
+0001CAr 3  20 rr rr     	jsr @beep
+0001CDr 3  28           	plp
+0001CEr 3  0A           	asl a
+0001CFr 3  D0 F8        	bne :-
+0001D1r 3               
+0001D1r 3  68           @zero:  pla
+0001D2r 3  60           	rts
+0001D3r 3               
+0001D3r 3  48           @beep:  pha
+0001D4r 3               
+0001D4r 3               	; Set LSB of pitch based on carry
+0001D4r 3  A9 00        	lda #0
+0001D6r 3  69 FF        	adc #$FF
+0001D8r 3  8D 02 40     	sta $4002
+0001DBr 3               
+0001DBr 3               	; Set up square
+0001DBr 3  A9 01        	lda #1
+0001DDr 3  8D 15 40     	sta SNDCHN
+0001E0r 3  8D 03 40     	sta $4003
+0001E3r 3  8D 01 40     	sta $4001
+0001E6r 3               
+0001E6r 3               	; Fade volume
+0001E6r 3  A9 0F        	lda #15
+0001E8r 3  48           :       pha
+0001E9r 3  49 30        	eor #$30
+0001EBr 3  8D 00 40     	sta $4000
+0001EEr 3  A9 D3 20 rr  	delay_msec 8
+0001F2r 3  rr A9 37 20  
+0001F6r 3  rr rr        
+0001F8r 3  68           	pla
+0001F9r 3  18           	clc
+0001FAr 3  69 FF        	adc #255
+0001FCr 3  D0 EA        	bne :-
+0001FEr 3               
+0001FEr 3               	; Silence
+0001FEr 3  8D 15 40     	sta SNDCHN
+000201r 3  A9 DA 20 rr  	delay_msec 120
+000205r 3  rr A9 46 20  
+000209r 3  rr rr A9 03  
+000210r 3               
+000210r 3  68           	pla
+000211r 3  60           	rts
+000212r 3               
+000212r 2               
+000212r 2               .if !BUILD_MULTI
+000212r 2               	.include "serial.s"
+000212r 3               ; Serial output at 57600 bits/sec on controller port 2
+000212r 3               ;
+000212r 3               ; Uses stack and register A only, and doesn't mind page crossing
+000212r 3               ; (uses subroutines instead of loops).
+000212r 3               
+000212r 3               ; Initializes serial. If this isn't done, first byte sent to
+000212r 3               ; PC might be corrupt.
+000212r 3               ; Preserved: X, Y
+000212r 3               serial_init:
+000212r 3  38           	sec
+000213r 3  A9 FF        	lda #$FF
+000215r 3  D0 01        	bne serial_write_ ; always branches
+000217r 3               
+000217r 3               
+000217r 3               ; Writes byte A to serial
+000217r 3               ; Preserved: X, Y
+000217r 3               serial_write:
+000217r 3  18           	clc
+000218r 3               serial_write_:
+000218r 3  20 rr rr     	jsr @bit        ; start
+00021Br 3  EA           	nop             ; TODO: why the extra delay?
+00021Cr 3  20 rr rr     	jsr @first      ; bit 0
+00021Fr 3  20 rr rr     	jsr @bit        ; bit 1
+000222r 3  20 rr rr     	jsr @bit        ; bit 2
+000225r 3  20 rr rr     	jsr @bit        ; bit 3
+000228r 3  20 rr rr     	jsr @bit        ; bit 4
+00022Br 3  20 rr rr     	jsr @bit        ; bit 5
+00022Er 3  20 rr rr     	jsr @bit        ; bit 6
+000231r 3  20 rr rr     	jsr @bit        ; bit 7
+000234r 3  38           	sec             ; 2 stop bit
+000235r 3  EA           @first: nop             ; 4
+000236r 3  EA           	nop
+000237r 3               @bit:                   ; 6 jsr
+000237r 3  48           	pha             ; 3
+000238r 3  2A           	rol a           ; 2
+000239r 3  29 01        	and #1          ; 2
+00023Br 3  8D 16 40     	sta JOY1        ; 4
+00023Er 3  68           	pla             ; 4
+00023Fr 3  6A           	ror a           ; 2
+000240r 3  EA           	nop             ; 2
+000241r 3  60           	rts             ; 6
+000242r 3               
+000242r 2               .endif
+000242r 2               
+000242r 2               ; Sets up environment, calls main, then exits with code 0
+000242r 2               run_main:
+000242r 2               	; Initialize libraries
+000242r 2  20 rr rr     	jsr init_crc
+000245r 2               
+000245r 2               	; Establish consistent environment before
+000245r 2               	; running main
+000245r 2  20 rr rr     	jsr wait_vbl
+000248r 2  A9 0A        	lda #PPUMASK_BG0
+00024Ar 2  8D 01 20     	sta PPUMASK
+00024Dr 2  A9 3F 20 rr  	delay 2370+24
+000251r 2  rr A9 09 20  
+000255r 2  rr rr        
+000257r 2  A9 34        	lda #$34
+000259r 2  48           	pha
+00025Ar 2  A9 00        	lda #0
+00025Cr 2  8D 17 40     	sta SNDMODE
+00025Fr 2  AA           	tax
+000260r 2  A8           	tay
+000261r 2  18           	clc
+000262r 2  B8           	clv
+000263r 2  28           	plp
+000264r 2               
+000264r 2  20 rr rr     	jsr main
+000267r 2               
+000267r 2               	; Default to silent exit if main returns
+000267r 2  A9 00        	lda #0
+000269r 2               	; FALL THROUGH
+000269r 2               
+000269r 2               ; Exits program and prints result code if non-zero
+000269r 2               exit:
+000269r 2               	; Reset stack
+000269r 2  A2 FF        	ldx #$FF
+00026Br 2  9A           	txs
+00026Cr 2               
+00026Cr 2               	; Disable interrupts
+00026Cr 2  78           	sei
+00026Dr 2  48           	pha
+00026Er 2  20 rr rr     	jsr nmi_off
+000271r 2  68           	pla
+000272r 2               
+000272r 2  4C rr rr     	jmp exit_
+000275r 2               
+000275r 2               ; Reports internal error and exits program
+000275r 2               internal_error:
+000275r 2  48 A9 rr 85  	print_str "Internal error"
+000279r 2  0E A9 rr 85  
+00027Dr 2  0F 68 20 rr  
+000282r 2  A9 01        	lda #1
+000284r 2  4C rr rr     	jmp exit
+000287r 2               
+000287r 2               
+000287r 2               .if BUILD_NSF || BUILD_MULTI || BUILD_DEVCART
+000287r 2               	console_init:
+000287r 2               	console_show:
+000287r 2               	console_hide:
+000287r 2               	console_print:
+000287r 2               	console_flush:
+000287r 2               		rts
+000287r 2               .else
+000287r 2               	.include "console.s"
+000287r 3               ; Scrolling text console with line wrapping, 30x30 characters.
+000287r 3               ; Buffers lines for speed. Will work even if PPU doesn't
+000287r 3               ; support scrolling (until text reaches bottom).
+000287r 3               ; ** ASCII font must already be in CHR, and mirroring
+000287r 3               ; must be vertical or single-screen.
+000287r 3               
+000287r 3               ; Number of characters of margin on left and right, to avoid
+000287r 3               ; text getting cut off by common TVs
+000287r 3               console_margin = 1
+000287r 3               
+000287r 3               console_buf_size = 32
+000287r 3               console_width = console_buf_size - (console_margin*2)
+000287r 3               
+000287r 3  xx           zp_byte console_pos
+000287r 3  xx           zp_byte console_scroll
+000287r 3  xx           zp_byte console_temp
+000287r 3  xx xx xx xx  bss_res console_buf,console_buf_size
+00028Br 3  xx xx xx xx  
+00028Fr 3  xx xx xx xx  
+000287r 3               
+000287r 3               
+000287r 3               ; Waits for beginning of VBL
+000287r 3               ; Preserved: A, X, Y
+000287r 3               console_wait_vbl:
+000287r 3  2C 02 20     	bit PPUSTATUS
+00028Ar 3  2C 02 20     :       bit PPUSTATUS
+00028Dr 3  10 FB        	bpl :-
+00028Fr 3  60           	rts
+000290r 3               
+000290r 3               
+000290r 3               ; Initializes console
+000290r 3               console_init:
+000290r 3  20 rr rr     	jsr console_hide
+000293r 3  A9 00        	lda #0
+000295r 3  8D 00 20     	sta PPUCTRL
+000298r 3               
+000298r 3               	; Load palette
+000298r 3  A9 3F        	lda #$3F
+00029Ar 3  8D 06 20     	sta PPUADDR
+00029Dr 3  A9 00        	lda #0
+00029Fr 3  8D 06 20     	sta PPUADDR
+0002A2r 3  A9 0F        	lda #$0F        ; black background
+0002A4r 3  8D 07 20     	sta PPUDATA
+0002A7r 3  A9 30        	lda #$30        ; white text
+0002A9r 3  8D 07 20     	sta PPUDATA
+0002ACr 3  8D 07 20     	sta PPUDATA
+0002AFr 3  8D 07 20     	sta PPUDATA
+0002B2r 3               
+0002B2r 3               	; Fill nametable with spaces
+0002B2r 3  A9 20        	lda #$20
+0002B4r 3  8D 06 20     	sta PPUADDR
+0002B7r 3  A2 00        	ldx #0
+0002B9r 3  8E 06 20     	stx PPUADDR
+0002BCr 3  A2 F0        	ldx #240
+0002BEr 3  8D 07 20     :       sta PPUDATA
+0002C1r 3  8D 07 20     	sta PPUDATA
+0002C4r 3  8D 07 20     	sta PPUDATA
+0002C7r 3  8D 07 20     	sta PPUDATA
+0002CAr 3  CA           	dex
+0002CBr 3  D0 F1        	bne :-
+0002CDr 3               
+0002CDr 3               	; Clear attributes
+0002CDr 3  A9 00        	lda #0
+0002CFr 3  A2 40        	ldx #$40
+0002D1r 3  8D 07 20     :       sta PPUDATA
+0002D4r 3  CA           	dex
+0002D5r 3  D0 FA        	bne :-
+0002D7r 3               
+0002D7r 3               	; In case PPU doesn't support scrolling, start a
+0002D7r 3               	; couple of lines down
+0002D7r 3  A9 08        	lda #8
+0002D9r 3  85 rr        	sta console_scroll
+0002DBr 3  20 rr rr     	jsr console_scroll_up_
+0002DEr 3  4C rr rr     	jmp console_show
+0002E1r 3               
+0002E1r 3               
+0002E1r 3               ; Shows console display
+0002E1r 3               ; Preserved: X, Y
+0002E1r 3               console_show:
+0002E1r 3  48           	pha
+0002E2r 3  20 rr rr     	jsr console_wait_vbl
+0002E5r 3  A9 0A        	lda #PPUMASK_BG0
+0002E7r 3  8D 01 20     	sta PPUMASK
+0002EAr 3  4C rr rr     	jmp console_apply_scroll_
+0002EDr 3               
+0002EDr 3               
+0002EDr 3               ; Hides console display and makes screen black
+0002EDr 3               ; Preserved: X, Y
+0002EDr 3               console_hide:
+0002EDr 3  20 rr rr     	jsr console_wait_vbl
+0002F0r 3  A9 00        	lda #0
+0002F2r 3  8D 01 20     	sta PPUMASK
+0002F5r 3  60           	rts
+0002F6r 3               
+0002F6r 3               
+0002F6r 3               ; Prints char A to console. Will not appear until
+0002F6r 3               ; a newline or flush occurs.
+0002F6r 3               ; Preserved: A, X, Y
+0002F6r 3               console_print:
+0002F6r 3  C9 0A        	cmp #10
+0002F8r 3  F0 0E        	beq console_newline
+0002FAr 3               
+0002FAr 3               	; Write to buffer
+0002FAr 3  86 rr        	stx console_temp
+0002FCr 3  A6 rr        	ldx console_pos
+0002FEr 3  9D rr rr     	sta console_buf+console_margin,x
+000301r 3  A6 rr        	ldx console_temp
+000303r 3               
+000303r 3               	; Update pos and print newline if buf full
+000303r 3  C6 rr        	dec console_pos
+000305r 3  30 01        	bmi console_newline     ; reached end of line
+000307r 3               
+000307r 3  60           	rts
+000308r 3               
+000308r 3               
+000308r 3               ; Displays current line and starts new one
+000308r 3               ; Preserved: A, X, Y
+000308r 3               console_newline:
+000308r 3  48           	pha
+000309r 3  20 rr rr     	jsr console_wait_vbl
+00030Cr 3  20 rr rr     	jsr console_flush_
+00030Fr 3  20 rr rr     	jsr console_scroll_up_
+000312r 3  20 rr rr     	jsr console_flush_
+000315r 3  4C rr rr     	jmp console_apply_scroll_
+000318r 3               
+000318r 3               
+000318r 3               console_get_scroll_:
+000318r 3               	; A = (console_scroll+8)%240
+000318r 3  A5 rr        	lda console_scroll
+00031Ar 3  C9 E8        	cmp #240-8
+00031Cr 3  90 02        	bcc :+
+00031Er 3  69 0F        	adc #16-1;+1 for set carry
+000320r 3  69 08        :       adc #8
+000322r 3  60           	rts
+000323r 3               
+000323r 3               
+000323r 3               console_scroll_up_:
+000323r 3               	; Scroll up 8 pixels
+000323r 3  20 rr rr     	jsr console_get_scroll_
+000326r 3  85 rr        	sta console_scroll
+000328r 3               
+000328r 3  86 rr        	stx console_temp
+00032Ar 3               
+00032Ar 3               	; Start new clear line
+00032Ar 3  A9 20        	lda #' '
+00032Cr 3  A2 1F        	ldx #console_buf_size-1
+00032Er 3  9D rr rr     :       sta console_buf,x
+000331r 3  CA           	dex
+000332r 3  10 FA        	bpl :-
+000334r 3  A2 1D        	ldx #console_width-1
+000336r 3  86 rr        	stx console_pos
+000338r 3               
+000338r 3  A6 rr        	ldx console_temp
+00033Ar 3  60           	rts
+00033Br 3               
+00033Br 3               
+00033Br 3               ; Displays current line's contents without scrolling.
+00033Br 3               ; Preserved: A, X, Y
+00033Br 3               console_flush:
+00033Br 3  48           	pha
+00033Cr 3  20 rr rr     	jsr console_wait_vbl
+00033Fr 3  20 rr rr     	jsr console_flush_
+000342r 3               console_apply_scroll_:
+000342r 3  A9 00        	lda #0
+000344r 3  8D 06 20     	sta PPUADDR
+000347r 3  8D 06 20     	sta PPUADDR
+00034Ar 3               
+00034Ar 3  8D 05 20     	sta PPUSCROLL
+00034Dr 3  20 rr rr     	jsr console_get_scroll_
+000350r 3  8D 05 20     	sta PPUSCROLL
+000353r 3               
+000353r 3  68           	pla
+000354r 3  60           	rts
+000355r 3               
+000355r 3               console_flush_:
+000355r 3               	; Address line in nametable
+000355r 3  A5 rr        	lda console_scroll
+000357r 3  85 rr        	sta console_temp
+000359r 3  A9 08        	lda #$08
+00035Br 3  06 rr        	asl console_temp
+00035Dr 3  2A           	rol a
+00035Er 3  06 rr        	asl console_temp
+000360r 3  2A           	rol a
+000361r 3  8D 06 20     	sta PPUADDR
+000364r 3  A5 rr        	lda console_temp
+000366r 3  8D 06 20     	sta PPUADDR
+000369r 3               
+000369r 3               	; Copy line
+000369r 3  86 rr        	stx console_temp
+00036Br 3  A2 1F        	ldx #console_buf_size-1
+00036Dr 3  BD rr rr     :       lda console_buf,x
+000370r 3  8D 07 20     	sta PPUDATA
+000373r 3  CA           	dex
+000374r 3  10 F7        	bpl :-
+000376r 3  A6 rr        	ldx console_temp
+000378r 3               
+000378r 3  60           	rts
+000379r 3               
+000379r 3               
+000379r 2               .endif
+000379r 2               
+000379r 2               
+000379r 2               ; ******************************************* Single Test
+000379r 2               
+000379r 2               .if !BUILD_MULTI
+000379r 2               
+000379r 2               print_char_:
+000379r 2  20 rr rr     	jsr console_print
+00037Cr 2  4C rr rr     	jmp serial_write
+00037Fr 2               
+00037Fr 2               ; Reset handler
+00037Fr 2               .ifndef CUSTOM_RESET
+00037Fr 2               	reset = std_reset
+00037Fr 2               .endif
+00037Fr 2               
+00037Fr 2               .macro init_nes
+00037Fr 2               	sei
+00037Fr 2               	cld
+00037Fr 2               	ldx #$FF
+00037Fr 2               	txs
+00037Fr 2               
+00037Fr 2               	.if !BUILD_NSF
+00037Fr 2               	; Init PPU
+00037Fr 2               	lda #0
+00037Fr 2               	sta PPUCTRL
+00037Fr 2               	sta PPUMASK
+00037Fr 2               	.endif
+00037Fr 2               
+00037Fr 2               	; Clear RAM
+00037Fr 2               	lda #0
+00037Fr 2               	ldx #7      ; last page
+00037Fr 2               	ldy #<nv_ram    ; offset in last page+1
+00037Fr 2               	sta <0
+00037Fr 2               @clear_page:
+00037Fr 2               	stx <1
+00037Fr 2               :   dey
+00037Fr 2               	sta (0),y
+00037Fr 2               	bne :-
+00037Fr 2               	dex
+00037Fr 2               	bpl @clear_page
+00037Fr 2               
+00037Fr 2               	.if !BUILD_NSF
+00037Fr 2               	; Let PPU initialize
+00037Fr 2               :   bit PPUSTATUS
+00037Fr 2               	bpl :-
+00037Fr 2               :   bit PPUSTATUS
+00037Fr 2               	bpl :-
+00037Fr 2               	.endif
+00037Fr 2               .endmacro
+00037Fr 2               
+00037Fr 2               std_reset:
+00037Fr 2  78 D8 A2 FF  	init_nes
+000383r 2  9A A9 00 8D  
+000387r 2  00 20 8D 01  
+0003A8r 2               
+0003A8r 2               .if BUILD_DEVCART
+0003A8r 2               	delay_msec 55
+0003A8r 2               .endif
+0003A8r 2               
+0003A8r 2               .ifdef CHR_RAM
+0003A8r 2               	; Load ASCII font into CHR RAM
+0003A8r 2               	jsr wait_vbl
+0003A8r 2               	ldy #0
+0003A8r 2               	sty PPUADDR
+0003A8r 2               	sty PPUADDR
+0003A8r 2               	ldx #<@ascii
+0003A8r 2               	stx addr
+0003A8r 2               	ldx #>@ascii
+0003A8r 2               @page:
+0003A8r 2               	stx addr+1
+0003A8r 2               :   lda (addr),y
+0003A8r 2               	sta PPUDATA
+0003A8r 2               	iny
+0003A8r 2               	bne :-
+0003A8r 2               	inx
+0003A8r 2               	cpx #>@ascii_end
+0003A8r 2               	bne @page
+0003A8r 2               
+0003A8r 2               .pushseg
+0003A8r 2               .rodata
+0003A8r 2               @ascii:
+0003A8r 2               	.incbin "ascii.chr"
+0003A8r 2               @ascii_end:
+0003A8r 2               .popseg
+0003A8r 2               .endif
+0003A8r 2               
+0003A8r 2  20 rr rr     	jsr console_init
+0003ABr 2  20 rr rr     	jsr serial_init
+0003AEr 2  4C rr rr     	jmp run_main
+0003B1r 2               
+0003B1r 2               
+0003B1r 2               ; Exit handler
+0003B1r 2               exit_:
+0003B1r 2               	; 0: ""
+0003B1r 2  C9 01 B0 03  	cmp #1
+0003B5r 2  4C rr rr     
+0003B8r 2               	jlt exit2
+0003B8r 2               
+0003B8r 2               	; 1: "Failed"
+0003B8r 2  D0 10        	bne :+
+0003BAr 2  48 A9 rr 85  	print_str {newline,"Failed"}
+0003BEr 2  0E A9 rr 85  
+0003C2r 2  0F 68 20 rr  
+0003C7r 2  4C rr rr     	jmp exit2
+0003CAr 2               
+0003CAr 2               	; n: "Error n"
+0003CAr 2  48           :   pha
+0003CBr 2  48 A9 rr 85  	print_str {newline,"Error "}
+0003CFr 2  0E A9 rr 85  
+0003D3r 2  0F 68 20 rr  
+0003D8r 2  20 rr rr     	jsr print_dec
+0003DBr 2  68           	pla
+0003DCr 2               
+0003DCr 2               exit2:
+0003DCr 2               .if !BUILD_DEVCART
+0003DCr 2               	; Be sure output is visible
+0003DCr 2  48           	pha
+0003DDr 2  48 A9 rr 85  	print_str {newline,newline,newline}
+0003E1r 2  0E A9 rr 85  
+0003E5r 2  0F 68 20 rr  
+0003EAr 2  20 rr rr     	jsr console_show
+0003EDr 2  68           	pla
+0003EEr 2               
+0003EEr 2               	; Report audibly as well
+0003EEr 2  20 rr rr     	jsr beep_bits
+0003F1r 2               .else
+0003F1r 2               	; Tell host to stop capturing serial
+0003F1r 2               	lda #$1A
+0003F1r 2               	jsr serial_write
+0003F1r 2               	delay_msec 400
+0003F1r 2               .endif
+0003F1r 2               
+0003F1r 2               	; Clear nv_ram
+0003F1r 2  A9 00        	lda #0
+0003F3r 2  A2 F0        	ldx #<nv_ram
+0003F5r 2  9D 00 07     :   sta nv_ram&$FF00,x
+0003F8r 2  E8           	inx
+0003F9r 2  D0 FA        	bne :-
+0003FBr 2               
+0003FBr 2  4C rr rr     	jmp forever
+0003FEr 2               
+0003FEr 2               
+0003FEr 2               ; ******************************************* Building multi
+0003FEr 2               .else
+0003FEr 2               
+0003FEr 2               ; These hook into the code that runs each test in sequence
+0003FEr 2               exit_       = $BFD2
+0003FEr 2               print_char_ = $BFD5
+0003FEr 2               std_reset_  = $BFD8
+0003FEr 2               
+0003FEr 2               .pushseg
+0003FEr 2               .segment "VECTORS"
+0003FEr 2               	.word 0,0,0, nmi, reset, irq
+0003FEr 2               .segment "HOOKS"
+0003FEr 2               SET_DEFAULT MULTI_TYPE,$56
+0003FEr 2               	.byte MULTI_TYPE,0
+0003FEr 2               	.word filename,run_main
+0003FEr 2               	.res 5
+0003FEr 2               reset:
+0003FEr 2               	; Reset MMC1, map shell to $8000, then run it
+0003FEr 2               
+0003FEr 2               	; write $80 to reset shift register,
+0003FEr 2               	; then write $08 to reg 0
+0003FEr 2               	lda #$90
+0003FEr 2               :   sta $8000
+0003FEr 2               	lsr a
+0003FEr 2               	cmp #$02
+0003FEr 2               	bne :-
+0003FEr 2               
+0003FEr 2               	jmp std_reset_
+0003FEr 2               .popseg
+0003FEr 2               
+0003FEr 2               CUSTOM_HEADER=1
+0003FEr 2               
+0003FEr 2               .endif
+0003FEr 2               
+0003FEr 2               
+0003FEr 2               ; ******************************************* Building ROM
+0003FEr 2               .if !BUILD_NSF
+0003FEr 2               
+0003FEr 2               ; iNES data
+0003FEr 2               .ifndef CUSTOM_HEADER
+0003FEr 2               .pushseg
+0003FEr 2               .segment "HEADER"
+000000r 2  4E 45 53 1A  	.byte "NES",26
+000004r 2               .ifdef CHR_RAM
+000004r 2               	.byte 2,0 ; 32K PRG, CHR RAM
+000004r 2               	.byte $01 ; UNROM, vertical mirroring
+000004r 2               .else
+000004r 2  02 01        	.byte 2,1 ; 32K PRG, 8K CHR
+000006r 2  31           	.byte $31 ; CNROM, vertical mirroring
+000007r 2               .segment "CHARS"
+000000r 2  00 00 00 00  	.incbin "ascii.chr"
+000004r 2  00 00 00 00  
+000008r 2  00 00 00 00  
+000800r 2  xx xx xx xx  	.align $2000
+000804r 2  xx xx xx xx  
+000808r 2  xx xx xx xx  
+002000r 2               .endif
+002000r 2               .segment "VECTORS"
+000000r 2  00 00 00 00  	.word 0,0,0, nmi, reset, irq
+000004r 2  00 00 rr rr  
+000008r 2  rr rr rr rr  
+00000Cr 2               .popseg
+0003FEr 2               .endif
+0003FEr 2               
+0003FEr 2               
+0003FEr 2               ; ******************************************* Building NSF
+0003FEr 2               .else
+0003FEr 2               
+0003FEr 2               ; Reports byte A to user by printing it in hex and
+0003FEr 2               ; reporting its bits via sound.
+0003FEr 2               ; Preserved: A, X, Y
+0003FEr 2               report_value:
+0003FEr 2               	jsr print_a
+0003FEr 2               	jmp beep_bits
+0003FEr 2               
+0003FEr 2               ; Try to affect registers/flags in a similar way
+0003FEr 2               nmi_off:
+0003FEr 2               	lda #0
+0003FEr 2               	rts
+0003FEr 2               
+0003FEr 2               wait_vbl:
+0003FEr 2               	bit wait_vbl+2
+0003FEr 2               nsf_play:
+0003FEr 2               	rts
+0003FEr 2               
+0003FEr 2               forever:
+0003FEr 2               	jmp forever
+0003FEr 2               
+0003FEr 2               .pushseg
+0003FEr 2               .segment "HEADER"
+0003FEr 2               	.byte "NESM",26,1,1,1
+0003FEr 2               	.word $E000,reset,nsf_play
+0003FEr 2               .segment "VECTORS"
+0003FEr 2               	.word 0,0,0,internal_error,internal_error,internal_error
+0003FEr 2               .popseg
+0003FEr 2               
+0003FEr 2               .endif
+0003FEr 2               
+0003FEr 2               
+0003FEr 2               ; ******************************************* Running on NES
+0003FEr 2               .if !BUILD_NSF
+0003FEr 2               
+0003FEr 2               ; Reports byte A to user by printing it in hex.
+0003FEr 2               ; Preserved: A, X, Y
+0003FEr 2               report_value = print_a
+0003FEr 2               
+0003FEr 2               ; Clears VBL flag then waits for it to be set. Due to
+0003FEr 2               ; PPU quirk, this could take almost TWO frames.
+0003FEr 2               ; Preserved: A, X, Y
+0003FEr 2  xx xx        .align 16 ; to avoid branch cross
+000400r 2               wait_vbl:
+000400r 2  2C 02 20     	bit PPUSTATUS
+000403r 2  2C 02 20     :   bit PPUSTATUS
+000406r 2  10 FB        	bpl :-
+000408r 2  60           	rts
+000409r 2               
+000409r 2               ; Turns NMI off
+000409r 2               ; Preserved: X, Y
+000409r 2               nmi_off:
+000409r 2  A9 00        	lda #0
+00040Br 2  8D 00 20     	sta PPUCTRL
+00040Er 2  60           	rts
+00040Fr 2               
+00040Fr 2               ; Disables interrupts and loops forever
+00040Fr 2               forever:
+00040Fr 2  78           	sei
+000410r 2  A9 00        	lda #0
+000412r 2  8D 00 20     	sta PPUCTRL
+000415r 2  4C rr rr     	jmp forever
+000418r 2               
+000418r 2               ; Default NMI
+000418r 2               .if (!.defined(nmi)) && (!.defined(CUSTOM_NMI))
+000418r 2  xx           zp_byte nmi_count
+000418r 2               
+000418r 2               BEGIN_NMI
+000418r 2  E6 rr        	inc nmi_count
+00041Ar 2  40           	rti
+00041Br 2               END_NMI
+00041Br 2               
+00041Br 2               ; Waits for NMI
+00041Br 2               ; Preserved: X, Y
+00041Br 2               wait_nmi:
+00041Br 2  A5 rr        	lda nmi_count
+00041Dr 2  C5 rr        :   cmp nmi_count
+00041Fr 2  F0 FC        	beq :-
+000421r 2  60           	rts
+000422r 2               .endif
+000422r 2               
+000422r 2               ; Default IRQ
+000422r 2               .if (!.defined(irq)) && (!.defined(CUSTOM_IRQ))
+000422r 2               BEGIN_IRQ
+000422r 2  2C 15 40     	bit SNDCHN  ; clear APU IRQ flag
+000425r 2  40           	rti
+000426r 2               END_IRQ
+000426r 2               .endif
+000426r 2               
+000426r 2               .endif
+000426r 2               
+000426r 2               
+000426r 2               ; Prints filename and newline, if available, otherwise
+000426r 2               ; does nothing.
+000426r 2               ; Preserved: A, X, Y
+000426r 2               .if .defined(FILENAME_KNOWN) && (!BUILD_DEVCART)
+000426r 2               print_filename:
+000426r 2               	jsr print_newline
+000426r 2               	;print_str {newline,"Test:"}
+000426r 2               	lda #<filename
+000426r 2               	sta addr
+000426r 2               	lda #>filename
+000426r 2               	sta addr+1
+000426r 2               	jsr print_str_addr
+000426r 2               	jsr print_newline
+000426r 2               	rts
+000426r 2               
+000426r 2               .pushseg
+000426r 2               .segment "STRINGS"
+000426r 2               ; Filename terminated with zero byte, or just zero byte
+000426r 2               ; if filename isn't available.
+000426r 2               filename:
+000426r 2               	.incbin "ram:rom.nes"
+000426r 2               	.byte 0
+000426r 2               .popseg
+000426r 2               .else
+000426r 2               print_filename:
+000426r 2  60           	rts
+000427r 2               
+000427r 2               filename:
+000427r 2  00           	.byte 0
+000428r 2               .endif
+000428r 2               
+000428r 2               
+000428r 2               ; User code goes in main code segment
+000428r 2               .segment "CODE"
+000000r 2  EA           	nop
+000001r 2               
+000001r 1               
+000001r 1               .macro set_addr n
+000001r 1               	lda #<n
+000001r 1               	sta addr
+000001r 1               	lda #>n
+000001r 1               	sta addr+1
+000001r 1               .endmacro
+000001r 1               
+000001r 1  20 rr rr     begin:  jsr wait_vbl
+000004r 1  A9 4D 20 rr  	delay 29800
+000008r 1  rr A9 74 20  
+00000Cr 1  rr rr        
+00000Er 1  60           	rts
+00000Fr 1               
+00000Fr 1  48 A9 02 20  main:   set_test 2,"$2002 must be mirrored every 8 bytes to $3FFA"
+000013r 1  rr rr A9 rr  
+000017r 1  85 rr A9 rr  
+00001Er 1  20 rr rr     	jsr begin
+000021r 1  AD FA 3F     	lda $3FFA
+000024r 1  30 03 4C rr  	jpl test_failed
+000028r 1  rr           
+000029r 1  AD FA 3F     	lda $3FFA
+00002Cr 1  10 03 4C rr  	jmi test_failed
+000030r 1  rr           
+000031r 1               
+000031r 1  48 A9 03 20  	set_test 3,"LDA abs,x"
+000035r 1  rr rr A9 rr  
+000039r 1  85 rr A9 rr  
+000040r 1  20 rr rr     	jsr begin
+000043r 1  A2 22        	ldx #$22
+000045r 1  BD 00 20     	lda $2000,x     ; no dummy read
+000048r 1  30 03 4C rr  	jpl test_failed
+00004Cr 1  rr           
+00004Dr 1  AD 02 20     	lda $2002
+000050r 1  10 03 4C rr  	jmi test_failed
+000054r 1  rr           
+000055r 1               
+000055r 1  20 rr rr     	jsr begin
+000058r 1  A2 22        	ldx #$22
+00005Ar 1  BD E0 20     	lda $20E0,x     ; dummy read from $2002
+00005Dr 1  10 03 4C rr  	jmi test_failed
+000061r 1  rr           
+000062r 1  AD 02 20     	lda $2002
+000065r 1  10 03 4C rr  	jmi test_failed
+000069r 1  rr           
+00006Ar 1               
+00006Ar 1  20 rr rr     	jsr begin
+00006Dr 1  A2 22        	ldx #$22
+00006Fr 1  BD E2 20     	lda $20E2,x     ; dummy read from $2004
+000072r 1  AD 02 20     	lda $2002
+000075r 1  30 03 4C rr  	jpl test_failed
+000079r 1  rr           
+00007Ar 1               
+00007Ar 1  20 rr rr     	jsr begin
+00007Dr 1  A2 22        	ldx #$22
+00007Fr 1  BD E0 3F     	lda $3FE0,x     ; dummy read from $3F02
+000082r 1  AD 02 20     	lda $2002
+000085r 1  10 03 4C rr  	jmi test_failed
+000089r 1  rr           
+00008Ar 1               
+00008Ar 1  48 A9 04 20  	set_test 4,"STA abs,x"
+00008Er 1  rr rr A9 rr  
+000092r 1  85 rr A9 rr  
+000099r 1  20 rr rr     	jsr begin
+00009Cr 1  8D 02 20     	sta $2002       ; no dummy read
+00009Fr 1  AD 02 20     	lda $2002
+0000A2r 1  30 03 4C rr  	jpl test_failed
+0000A6r 1  rr           
+0000A7r 1               
+0000A7r 1  20 rr rr     	jsr begin
+0000AAr 1  A2 22        	ldx #$22
+0000ACr 1  9D E0 20     	sta $20E0,x     ; dummy read from $2002
+0000AFr 1  10 03 4C rr  	jmi test_failed
+0000B3r 1  rr           
+0000B4r 1  AD 02 20     	lda $2002
+0000B7r 1  10 03 4C rr  	jmi test_failed
+0000BBr 1  rr           
+0000BCr 1               
+0000BCr 1  20 rr rr     	jsr begin
+0000BFr 1  A2 22        	ldx #$22
+0000C1r 1  9D E2 20     	sta $20E2,x     ; dummy read from $2004
+0000C4r 1  AD 02 20     	lda $2002
+0000C7r 1  30 03 4C rr  	jpl test_failed
+0000CBr 1  rr           
+0000CCr 1               
+0000CCr 1  20 rr rr     	jsr begin
+0000CFr 1  A2 22        	ldx #$22
+0000D1r 1  9D E0 3F     	sta $3FE0,x     ; dummy read from $3F02
+0000D4r 1  AD 02 20     	lda $2002
+0000D7r 1  10 03 4C rr  	jmi test_failed
+0000DBr 1  rr           
+0000DCr 1               
+0000DCr 1  48 A9 05 20  	set_test 5,"LDA (z),y"
+0000E0r 1  rr rr A9 rr  
+0000E4r 1  85 rr A9 rr  
+0000EBr 1  20 rr rr     	jsr begin
+0000EEr 1  A0 22        	ldy #$22
+0000F0r 1  A9 00 85 0E  	set_addr $2000
+0000F4r 1  A9 20 85 0F  
+0000F8r 1  B1 0E        	lda (addr),y    ; no dummy read
+0000FAr 1  30 03 4C rr  	jpl test_failed
+0000FEr 1  rr           
+0000FFr 1  AD 02 20     	lda $2002
+000102r 1  10 03 4C rr  	jmi test_failed
+000106r 1  rr           
+000107r 1               
+000107r 1  20 rr rr     	jsr begin
+00010Ar 1  A0 22        	ldy #$22
+00010Cr 1  A9 E0 85 0E  	set_addr $20E0
+000110r 1  A9 20 85 0F  
+000114r 1  B1 0E        	lda (addr),y    ; dummy read from $2002
+000116r 1  10 03 4C rr  	jmi test_failed
+00011Ar 1  rr           
+00011Br 1  AD 02 20     	lda $2002
+00011Er 1  10 03 4C rr  	jmi test_failed
+000122r 1  rr           
+000123r 1               
+000123r 1  20 rr rr     	jsr begin
+000126r 1  A0 22        	ldy #$22
+000128r 1  A9 E2 85 0E  	set_addr $20E2
+00012Cr 1  A9 20 85 0F  
+000130r 1  B1 0E        	lda (addr),y    ; dummy read from $2004
+000132r 1  AD 02 20     	lda $2002
+000135r 1  30 03 4C rr  	jpl test_failed
+000139r 1  rr           
+00013Ar 1               
+00013Ar 1  20 rr rr     	jsr begin
+00013Dr 1  A0 22        	ldy #$22
+00013Fr 1  A9 E0 85 0E  	set_addr $3FE0
+000143r 1  A9 3F 85 0F  
+000147r 1  B1 0E        	lda (addr),y    ; dummy read from $3F02
+000149r 1  AD 02 20     	lda $2002
+00014Cr 1  10 03 4C rr  	jmi test_failed
+000150r 1  rr           
+000151r 1               
+000151r 1  48 A9 06 20  	set_test 6,"STA (z),y"
+000155r 1  rr rr A9 rr  
+000159r 1  85 rr A9 rr  
+000160r 1  20 rr rr     	jsr begin
+000163r 1  A9 E0 85 0E  	set_addr $20E0
+000167r 1  A9 20 85 0F  
+00016Br 1  A0 22        	ldy #$22
+00016Dr 1  91 0E        	sta (addr),y    ; dummy read from $2002
+00016Fr 1  10 03 4C rr  	jmi test_failed
+000173r 1  rr           
+000174r 1  AD 02 20     	lda $2002
+000177r 1  10 03 4C rr  	jmi test_failed
+00017Br 1  rr           
+00017Cr 1               
+00017Cr 1  20 rr rr     	jsr begin
+00017Fr 1  A9 E2 85 0E  	set_addr $20E2
+000183r 1  A9 20 85 0F  
+000187r 1  A0 22        	ldy #$22
+000189r 1  91 0E        	sta (addr),y    ; dummy read from $2004
+00018Br 1  AD 02 20     	lda $2002
+00018Er 1  30 03 4C rr  	jpl test_failed
+000192r 1  rr           
+000193r 1               
+000193r 1  20 rr rr     	jsr begin
+000196r 1  A9 E0 85 0E  	set_addr $3FE0
+00019Ar 1  A9 3F 85 0F  
+00019Er 1  A0 22        	ldy #$22
+0001A0r 1  91 0E        	sta (addr),y    ; dummy read from $3F02
+0001A2r 1  AD 02 20     	lda $2002
+0001A5r 1  10 03 4C rr  	jmi test_failed
+0001A9r 1  rr           
+0001AAr 1               
+0001AAr 1  48 A9 07 20  	set_test 7,"LDA (z,x)"
+0001AEr 1  rr rr A9 rr  
+0001B2r 1  85 rr A9 rr  
+0001B9r 1  20 rr rr     	jsr begin
+0001BCr 1  A2 00        	ldx #0
+0001BEr 1  A9 02 85 0E  	set_addr $2002
+0001C2r 1  A9 20 85 0F  
+0001C6r 1  A1 0E        	lda (addr,x)    ; no dummy read
+0001C8r 1  30 03 4C rr  	jpl test_failed
+0001CCr 1  rr           
+0001CDr 1               
+0001CDr 1  48 A9 08 20  	set_test 8,"STA (z,x)"
+0001D1r 1  rr rr A9 rr  
+0001D5r 1  85 rr A9 rr  
+0001DCr 1  20 rr rr     	jsr begin
+0001DFr 1  A2 00        	ldx #0
+0001E1r 1  A9 02 85 0E  	set_addr $2002
+0001E5r 1  A9 20 85 0F  
+0001E9r 1  81 0E        	sta (addr,x)    ; no dummy read
+0001EBr 1  AD 02 20     	lda $2002
+0001EEr 1  30 03 4C rr  	jpl test_failed
+0001F2r 1  rr           
+0001F3r 1               
+0001F3r 1  4C rr rr     	jmp tests_passed
+0001F3r 1               

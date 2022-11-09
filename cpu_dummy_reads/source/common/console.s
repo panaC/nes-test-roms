@@ -27,6 +27,7 @@ console_wait_vbl:
 
 
 ; Initializes console
+; 0xe490 
 console_init:
 	jsr console_hide
 	lda #0

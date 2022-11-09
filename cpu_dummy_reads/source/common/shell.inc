@@ -195,6 +195,7 @@ std_reset:
 .popseg
 .endif
 	
+	; 0xe5a8
 	jsr console_init
 	jsr serial_init
 	jmp run_main

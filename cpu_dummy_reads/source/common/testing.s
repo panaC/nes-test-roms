@@ -151,7 +151,7 @@ beep_bits:
 	delay_msec 8
 	pla
 	clc
-	adc #-1
+	adc #255
 	bne :-
 	
 	; Silence

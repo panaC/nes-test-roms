@@ -17,9 +17,11 @@ begin:  jsr wait_vbl
 	delay 29800
 	rts
 
+
+; 0xe00f
 main:   set_test 2,"$2002 must be mirrored every 8 bytes to $3FFA"
 	jsr begin
-	lda $3FFA
+	lda $3FFA ; 0xe029 ; ppu mirror of 2002
 	jpl test_failed
 	lda $3FFA
 	jmi test_failed
